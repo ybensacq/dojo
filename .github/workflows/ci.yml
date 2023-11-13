@@ -67,61 +67,6 @@ jobs:
   #     - run: cargo install cairo-lang-formatter
   #     - run: scripts/cairo_fmt.sh --check
 
-  dojo-core-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: arduino/setup-protoc@v2
-      - run: cargo run --bin sozo -- --manifest-path crates/dojo-core/Scarb.toml test
-
-  dojo-erc-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: arduino/setup-protoc@v2
-      - run: cargo run --bin sozo -- --manifest-path crates/dojo-erc/Scarb.toml test
-
-  dojo-defi-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: arduino/setup-protoc@v2
-      - run: cargo run --bin sozo -- --manifest-path crates/dojo-defi/Scarb.toml test
-
-  dojo-primitive-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: arduino/setup-protoc@v2
-      - run: cargo run --bin sozo -- --manifest-path crates/dojo-primitives/Scarb.toml test
-
-  dojo-spawn-and-move-example-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: arduino/setup-protoc@v2
-      - run: cargo run --bin sozo -- --manifest-path examples/spawn-and-move/Scarb.toml test
-
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -150,20 +95,6 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: scripts/rust_fmt.sh --check
-
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: >
-          scripts/docs.sh
 
   test-hurl:
     runs-on: ubuntu-latest

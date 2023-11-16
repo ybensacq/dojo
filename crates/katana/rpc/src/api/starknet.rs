@@ -78,6 +78,9 @@ pub enum StarknetApiError {
     TooManyKeysInFilter = 34,
     #[error("Failed to fetch pending transactions")]
     FailedToFetchPendingTransactions = 38,
+
+    #[error("Solis: Assets are invalid on L2")]
+    SolisAssetFault = 7777,
 }
 
 impl From<StarknetApiError> for Error {

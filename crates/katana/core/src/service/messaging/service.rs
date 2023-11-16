@@ -12,6 +12,7 @@ use super::{MessagingConfig, Messenger, MessengerMode, MessengerResult, LOG_TARG
 use crate::backend::storage::transaction::{L1HandlerTransaction, Transaction};
 use crate::backend::Backend;
 use crate::pool::TransactionPool;
+use crate::hooker::KatanaHooker;
 
 type MessagingFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type MessageGatheringFuture = MessagingFuture<MessengerResult<(u64, usize)>>;
@@ -41,10 +42,11 @@ impl MessagingService {
         config: MessagingConfig,
         pool: Arc<TransactionPool>,
         backend: Arc<Backend>,
+        hooker: Arc<dyn KatanaHooker + Send + Sync>,
     ) -> anyhow::Result<Self> {
         let gather_from_block = config.from_block;
         let interval = interval_from_seconds(config.interval);
-        let messenger = match MessengerMode::from_config(config).await {
+        let messenger = match MessengerMode::from_config(config, hooker).await {
             Ok(m) => Arc::new(m),
             Err(_) => {
                 panic!(

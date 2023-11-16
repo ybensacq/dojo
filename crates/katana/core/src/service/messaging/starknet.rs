@@ -22,6 +22,7 @@ use url::Url;
 use super::{Error, MessagingConfig, Messenger, MessengerResult, LOG_TARGET};
 use crate::backend::storage::transaction::L1HandlerTransaction;
 use crate::utils::transaction::compute_l1_handler_transaction_hash_felts;
+use crate::hooker::KatanaHooker;
 
 /// As messaging in starknet is only possible with EthAddress in the `to_address`
 /// field, we have to set magic value to understand what the user want to do.
@@ -39,10 +40,11 @@ pub struct StarknetMessaging {
     wallet: LocalWallet,
     sender_account_address: FieldElement,
     messaging_contract_address: FieldElement,
+    hooker: Arc<dyn KatanaHooker + Send + Sync>,
 }
 
 impl StarknetMessaging {
-    pub async fn new(config: MessagingConfig) -> Result<StarknetMessaging> {
+    pub async fn new(config: MessagingConfig, hooker: Arc<dyn KatanaHooker + Send + Sync>) -> Result<StarknetMessaging> {
         let provider = AnyProvider::JsonRpcHttp(JsonRpcClient::new(HttpTransport::new(
             Url::parse(&config.rpc_url)?,
         )));
@@ -61,6 +63,7 @@ impl StarknetMessaging {
             chain_id,
             sender_account_address,
             messaging_contract_address,
+            hooker,
         })
     }
 
@@ -225,17 +228,26 @@ impl Messenger for StarknetMessaging {
 
         let (hashes, calls) = parse_messages(messages)?;
 
-        if !calls.is_empty() {
-            match self.send_invoke_tx(calls).await {
+        for call in &calls {
+            // 1. Verify before TX.
+            if !self.hooker.verify_message_to_starknet_before_tx(call.clone()).await {
+                continue;
+            }
+
+            match self.send_invoke_tx(vec![call.clone()]).await {
                 Ok(tx_hash) => {
                     trace!(target: LOG_TARGET, "Invoke transaction hash {:#064x}", tx_hash);
                 }
                 Err(e) => {
+                    // 2. React on TX error.
+                    self.hooker.react_on_starknet_tx_failed(call.clone()).await;
                     error!("Error sending invoke tx on Starknet: {:?}", e);
-                    return Err(Error::SendError);
                 }
             };
         }
+
+        // We don't want to use the multicall in order to not
+        // have all the transaction to fail because of 1.
 
         self.send_hashes(hashes.clone()).await?;
 
@@ -256,6 +268,8 @@ fn parse_messages(messages: &[MsgToL1]) -> MessengerResult<(Vec<FieldElement>, V
         // `to_address` is set to 'EXE'/'MSG' to indicate that the message
         // has to be executed or sent normally.
         let magic = m.to_address;
+
+        // TODO: Whitelist the orderbook contract.
 
         if magic == EXE_MAGIC {
             if m.payload.len() < 2 {

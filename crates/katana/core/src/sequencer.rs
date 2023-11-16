@@ -33,7 +33,7 @@ use crate::service::messaging::MessagingConfig;
 use crate::service::messaging::MessagingService;
 use crate::service::{NodeService, TransactionMiner};
 use crate::utils::event::{ContinuationToken, ContinuationTokenError};
-
+use crate::hooker::KatanaHooker;
 type SequencerResult<T> = Result<T, SequencerError>;
 
 #[derive(Debug, Default)]
@@ -49,10 +49,11 @@ pub struct KatanaSequencer {
     pub pool: Arc<TransactionPool>,
     pub backend: Arc<Backend>,
     pub block_producer: BlockProducer,
+    pub hooker: Arc<dyn KatanaHooker + Send + Sync>,
 }
 
 impl KatanaSequencer {
-    pub async fn new(config: SequencerConfig, starknet_config: StarknetConfig) -> Self {
+    pub async fn new(config: SequencerConfig, starknet_config: StarknetConfig, hooker: Arc<dyn KatanaHooker + Send + Sync>) -> Self {
         let backend = Arc::new(Backend::new(starknet_config).await);
 
         let pool = Arc::new(TransactionPool::new());
@@ -72,7 +73,7 @@ impl KatanaSequencer {
 
         #[cfg(feature = "messaging")]
         let messaging = if let Some(config) = config.messaging.clone() {
-            MessagingService::new(config, Arc::clone(&pool), Arc::clone(&backend)).await.ok()
+            MessagingService::new(config, Arc::clone(&pool), Arc::clone(&backend), Arc::clone(&hooker)).await.ok()
         } else {
             None
         };
@@ -85,7 +86,7 @@ impl KatanaSequencer {
             messaging,
         });
 
-        Self { pool, config, backend, block_producer }
+        Self { pool, config, backend, block_producer, hooker }
     }
 
     /// Returns the pending state if the sequencer is running in _interval_ mode. Otherwise `None`.

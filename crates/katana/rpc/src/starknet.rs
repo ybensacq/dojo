@@ -439,6 +439,10 @@ impl StarknetApiServer for StarknetApi {
         let chain_id = FieldElement::from_hex_be(&self.sequencer.chain_id().await.as_hex())
             .map_err(|_| StarknetApiError::UnexpectedError)?;
 
+        if !self.sequencer.hooker.verify_invoke_tx_before_pool(invoke_transaction.clone()).await {
+            return Err(StarknetApiError::SolisAssetFault.into());
+        }
+
         let transaction = broadcasted_invoke_rpc_to_api_transaction(invoke_transaction, chain_id);
         let transaction_hash = transaction.transaction_hash().0.into();
 

@@ -5,14 +5,15 @@ use std::time::Duration;
 
 use ::starknet::core::types::{FieldElement, MsgToL1};
 use futures::{Future, FutureExt, Stream};
+use tokio::sync::RwLock as AsyncRwLock;
 use tokio::time::{interval_at, Instant, Interval};
 use tracing::{error, info};
 
 use super::{MessagingConfig, Messenger, MessengerMode, MessengerResult, LOG_TARGET};
 use crate::backend::storage::transaction::{L1HandlerTransaction, Transaction};
 use crate::backend::Backend;
-use crate::pool::TransactionPool;
 use crate::hooker::KatanaHooker;
+use crate::pool::TransactionPool;
 
 type MessagingFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type MessageGatheringFuture = MessagingFuture<MessengerResult<(u64, usize)>>;
@@ -42,7 +43,7 @@ impl MessagingService {
         config: MessagingConfig,
         pool: Arc<TransactionPool>,
         backend: Arc<Backend>,
-        hooker: Arc<dyn KatanaHooker + Send + Sync>,
+        hooker: Arc<AsyncRwLock<dyn KatanaHooker + Send + Sync>>,
     ) -> anyhow::Result<Self> {
         let gather_from_block = config.from_block;
         let interval = interval_from_seconds(config.interval);

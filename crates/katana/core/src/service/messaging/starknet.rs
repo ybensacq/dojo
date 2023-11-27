@@ -16,13 +16,14 @@ use starknet_api::stark_felt;
 use starknet_api::transaction::{
     Calldata, L1HandlerTransaction as ApiL1HandlerTransaction, TransactionHash, TransactionVersion,
 };
+use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{debug, error, trace, warn};
 use url::Url;
 
 use super::{Error, MessagingConfig, Messenger, MessengerResult, LOG_TARGET};
 use crate::backend::storage::transaction::L1HandlerTransaction;
-use crate::utils::transaction::compute_l1_handler_transaction_hash_felts;
 use crate::hooker::KatanaHooker;
+use crate::utils::transaction::compute_l1_handler_transaction_hash_felts;
 
 /// As messaging in starknet is only possible with EthAddress in the `to_address`
 /// field, we have to set magic value to understand what the user want to do.
@@ -40,11 +41,14 @@ pub struct StarknetMessaging {
     wallet: LocalWallet,
     sender_account_address: FieldElement,
     messaging_contract_address: FieldElement,
-    hooker: Arc<dyn KatanaHooker + Send + Sync>,
+    hooker: Arc<AsyncRwLock<dyn KatanaHooker + Send + Sync>>,
 }
 
 impl StarknetMessaging {
-    pub async fn new(config: MessagingConfig, hooker: Arc<dyn KatanaHooker + Send + Sync>) -> Result<StarknetMessaging> {
+    pub async fn new(
+        config: MessagingConfig,
+        hooker: Arc<AsyncRwLock<dyn KatanaHooker + Send + Sync>>,
+    ) -> Result<StarknetMessaging> {
         let provider = AnyProvider::JsonRpcHttp(JsonRpcClient::new(HttpTransport::new(
             Url::parse(&config.rpc_url)?,
         )));
@@ -198,25 +202,44 @@ impl Messenger for StarknetMessaging {
 
         let mut l1_handler_txs: Vec<L1HandlerTransaction> = vec![];
 
-        self.fetch_events(BlockId::Number(from_block), BlockId::Number(to_block))
+        for (block_number, block_events) in self
+            .fetch_events(BlockId::Number(from_block), BlockId::Number(to_block))
             .await
             .map_err(|_| Error::SendError)
             .unwrap()
             .iter()
-            .for_each(|(block_number, block_events)| {
-                debug!(
-                    target: LOG_TARGET,
-                    "Converting events of block {} into L1HandlerTx ({} events)",
-                    block_number,
-                    block_events.len(),
-                );
+        {
+            debug!(
+                target: LOG_TARGET,
+                "Converting events of block {} into L1HandlerTx ({} events)",
+                block_number,
+                block_events.len(),
+            );
 
-                block_events.iter().for_each(|e| {
-                    if let Ok(tx) = l1_handler_tx_from_event(e, chain_id) {
+            for e in block_events.iter() {
+                if let Ok((tx, info)) = l1_handler_tx_from_event(e, chain_id) {
+                    let is_message_accepted = self
+                        .hooker
+                        .read()
+                        .await
+                        .verify_message_to_appchain(
+                            info.from_address,
+                            info.to_address,
+                            info.selector,
+                        )
+                        .await;
+
+                    if is_message_accepted {
                         l1_handler_txs.push(tx)
+                    } else {
+                        warn!(target: LOG_TARGET, "Message to appchain rejected by hooker: from:{:?} to:{:?} selector:{:?}",
+                                  info.from_address,
+                                  info.to_address,
+                                  info.selector);
                     }
-                })
-            });
+                }
+            }
+        }
 
         Ok((to_block, l1_handler_txs))
     }
@@ -230,7 +253,7 @@ impl Messenger for StarknetMessaging {
 
         for call in &calls {
             // 1. Verify before TX.
-            if !self.hooker.verify_message_to_starknet_before_tx(call.clone()).await {
+            if !self.hooker.read().await.verify_message_to_starknet_before_tx(call.clone()).await {
                 continue;
             }
 
@@ -240,7 +263,7 @@ impl Messenger for StarknetMessaging {
                 }
                 Err(e) => {
                     // 2. React on TX error.
-                    self.hooker.react_on_starknet_tx_failed(call.clone()).await;
+                    self.hooker.read().await.react_on_starknet_tx_failed(call.clone()).await;
                     error!("Error sending invoke tx on Starknet: {:?}", e);
                 }
             };
@@ -322,10 +345,17 @@ fn parse_messages(messages: &[MsgToL1]) -> MessengerResult<(Vec<FieldElement>, V
     Ok((hashes, calls))
 }
 
+// TODO: this will be reworked in Katana main to use `MsgToL2` from starknet-rs.
+struct MessageToL2Info {
+    pub from_address: FieldElement,
+    pub to_address: FieldElement,
+    pub selector: FieldElement,
+}
+
 fn l1_handler_tx_from_event(
     event: &EmittedEvent,
     chain_id: FieldElement,
-) -> Result<L1HandlerTransaction> {
+) -> Result<(L1HandlerTransaction, MessageToL2Info)> {
     if event.keys[0] != selector!("MessageSentToAppchain") {
         debug!(
             target: LOG_TARGET,
@@ -344,6 +374,8 @@ fn l1_handler_tx_from_event(
     let selector = event.data[0];
     let nonce = event.data[1];
     let version = 0_u32;
+
+    let info = MessageToL2Info { from_address, to_address, selector };
 
     // Skip the length of the serialized array for the payload which is data[2].
     // Payload starts at data[3].
@@ -378,7 +410,7 @@ fn l1_handler_tx_from_event(
         paid_l1_fee: 30000_u128,
     };
 
-    Ok(tx)
+    Ok((tx, info))
 }
 
 #[cfg(test)]
@@ -497,7 +529,7 @@ mod tests {
             paid_l1_fee: 30000_u128,
         };
 
-        let tx = l1_handler_tx_from_event(&event, chain_id).unwrap();
+        let (tx, _) = l1_handler_tx_from_event(&event, chain_id).unwrap();
 
         assert_eq!(tx.inner, expected.inner);
     }

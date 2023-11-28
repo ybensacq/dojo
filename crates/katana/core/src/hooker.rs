@@ -49,7 +49,7 @@ pub trait KatanaHooker {
     ///
     /// * `call` - The `Call` to inspect, built from the
     /// message.
-    async fn verify_message_to_starknet_before_tx(&self, call: Call) -> bool;
+    async fn verify_tx_for_starknet(&self, call: Call) -> bool;
 
     /// Runs when Solis attempts to execute an order on Starknet,
     /// but it fails.
@@ -58,5 +58,5 @@ pub trait KatanaHooker {
     ///
     /// * `call` - The `Call` of the transaction that has failed. Usually the same as
     ///   `verify_message_to_starknet_before_tx`.
-    async fn react_on_starknet_tx_failed(&self, call: Call);
+    async fn on_starknet_tx_failed(&self, call: Call);
 }

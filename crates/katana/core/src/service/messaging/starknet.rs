@@ -253,7 +253,7 @@ impl Messenger for StarknetMessaging {
 
         for call in &calls {
             // 1. Verify before TX.
-            if !self.hooker.read().await.verify_message_to_starknet_before_tx(call.clone()).await {
+            if !self.hooker.read().await.verify_tx_for_starknet(call.clone()).await {
                 continue;
             }
 
@@ -263,7 +263,7 @@ impl Messenger for StarknetMessaging {
                 }
                 Err(e) => {
                     // 2. React on TX error.
-                    self.hooker.read().await.react_on_starknet_tx_failed(call.clone()).await;
+                    self.hooker.read().await.on_starknet_tx_failed(call.clone()).await;
                     error!("Error sending invoke tx on Starknet: {:?}", e);
                 }
             };

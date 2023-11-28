@@ -439,7 +439,14 @@ impl StarknetApiServer for StarknetApi {
         let chain_id = FieldElement::from_hex_be(&self.sequencer.chain_id().await.as_hex())
             .map_err(|_| StarknetApiError::UnexpectedError)?;
 
-        if !self.sequencer.hooker.verify_invoke_tx_before_pool(invoke_transaction.clone()).await {
+        if !self
+            .sequencer
+            .hooker
+            .read()
+            .await
+            .verify_invoke_tx_before_pool(invoke_transaction.clone())
+            .await
+        {
             return Err(StarknetApiError::SolisAssetFault.into());
         }
 

@@ -13,17 +13,19 @@ use starknet::core::types::{
 use starknet_api::core::{ChainId, ClassHash, ContractAddress, Nonce};
 use starknet_api::hash::StarkFelt;
 use starknet_api::state::StorageKey;
+use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::backend::config::StarknetConfig;
 use crate::backend::contract::StarknetContract;
 use crate::backend::storage::block::{ExecutedBlock, PartialBlock, PartialHeader};
 use crate::backend::storage::transaction::{
     DeclareTransaction, DeployAccountTransaction, InvokeTransaction, KnownTransaction,
-    PendingTransaction, Transaction,
+    L1HandlerTransaction, PendingTransaction, Transaction,
 };
 use crate::backend::{Backend, ExternalFunctionCall};
 use crate::db::{AsStateRefDb, StateExtRef, StateRefDb};
 use crate::execution::{MaybeInvalidExecutedTransaction, PendingState};
+use crate::hooker::KatanaHooker;
 use crate::pool::TransactionPool;
 use crate::sequencer_error::SequencerError;
 use crate::service::block_producer::{BlockProducer, BlockProducerMode};
@@ -33,7 +35,6 @@ use crate::service::messaging::MessagingConfig;
 use crate::service::messaging::MessagingService;
 use crate::service::{NodeService, TransactionMiner};
 use crate::utils::event::{ContinuationToken, ContinuationTokenError};
-use crate::hooker::KatanaHooker;
 type SequencerResult<T> = Result<T, SequencerError>;
 
 #[derive(Debug, Default)]
@@ -49,11 +50,15 @@ pub struct KatanaSequencer {
     pub pool: Arc<TransactionPool>,
     pub backend: Arc<Backend>,
     pub block_producer: BlockProducer,
-    pub hooker: Arc<dyn KatanaHooker + Send + Sync>,
+    pub hooker: Arc<AsyncRwLock<dyn KatanaHooker + Send + Sync>>,
 }
 
 impl KatanaSequencer {
-    pub async fn new(config: SequencerConfig, starknet_config: StarknetConfig, hooker: Arc<dyn KatanaHooker + Send + Sync>) -> Self {
+    pub async fn new(
+        config: SequencerConfig,
+        starknet_config: StarknetConfig,
+        hooker: Arc<AsyncRwLock<dyn KatanaHooker + Send + Sync>>,
+    ) -> Self {
         let backend = Arc::new(Backend::new(starknet_config).await);
 
         let pool = Arc::new(TransactionPool::new());
@@ -73,7 +78,9 @@ impl KatanaSequencer {
 
         #[cfg(feature = "messaging")]
         let messaging = if let Some(config) = config.messaging.clone() {
-            MessagingService::new(config, Arc::clone(&pool), Arc::clone(&backend), Arc::clone(&hooker)).await.ok()
+            MessagingService::new(config, Arc::clone(&pool), Arc::clone(&backend), hooker.clone())
+                .await
+                .ok()
         } else {
             None
         };
@@ -163,6 +170,10 @@ impl KatanaSequencer {
 
     pub fn add_invoke_transaction(&self, transaction: InvokeTransaction) {
         self.pool.add_transaction(Transaction::Invoke(transaction))
+    }
+
+    pub fn add_l1_handler_transaction(&self, transaction: L1HandlerTransaction) {
+        self.pool.add_transaction(Transaction::L1Handler(transaction))
     }
 
     pub async fn estimate_fee(

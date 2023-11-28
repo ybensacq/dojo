@@ -47,12 +47,13 @@ use async_trait::async_trait;
 use ethereum::EthereumMessaging;
 use ethers::providers::ProviderError as EthereumProviderError;
 use serde::Deserialize;
+use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{error, info};
-use crate::hooker::KatanaHooker;
 
 pub use self::service::{MessagingOutcome, MessagingService};
 #[cfg(feature = "starknet-messaging")]
 use self::starknet::StarknetMessaging;
+use crate::hooker::KatanaHooker;
 
 pub(crate) const LOG_TARGET: &str = "messaging";
 pub(crate) const CONFIG_CHAIN_ETHEREUM: &str = "ethereum";
@@ -172,7 +173,7 @@ pub enum MessengerMode {
 impl MessengerMode {
     pub async fn from_config(
         config: MessagingConfig,
-        hooker: Arc<dyn KatanaHooker + Send + Sync>
+        hooker: Arc<AsyncRwLock<dyn KatanaHooker + Send + Sync>>,
     ) -> MessengerResult<Self> {
         match config.chain.as_str() {
             CONFIG_CHAIN_ETHEREUM => match EthereumMessaging::new(config).await {

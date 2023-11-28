@@ -13,12 +13,14 @@ use crate::proto;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Hash, Eq, Clone)]
 pub struct Query {
     pub clause: Clause,
+    pub limit: u32,
+    pub offset: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Hash, Eq, Clone)]
 pub enum Clause {
     Keys(KeysClause),
-    Attribute(AttributeClause),
+    Member(MemberClause),
     Composite(CompositeClause),
 }
 
@@ -29,9 +31,9 @@ pub struct KeysClause {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Hash, Eq, Clone)]
-pub struct AttributeClause {
+pub struct MemberClause {
     pub model: String,
-    pub attribute: String,
+    pub member: String,
     pub operator: ComparisonOperator,
     pub value: Value,
 }
@@ -105,7 +107,7 @@ impl TryFrom<proto::types::WorldMetadata> for dojo_types::WorldMetadata {
 
 impl From<Query> for proto::types::EntityQuery {
     fn from(value: Query) -> Self {
-        Self { clause: Some(value.clause.into()) }
+        Self { clause: Some(value.clause.into()), limit: value.limit, offset: value.offset }
     }
 }
 
@@ -115,9 +117,9 @@ impl From<Clause> for proto::types::Clause {
             Clause::Keys(clause) => {
                 Self { clause_type: Some(proto::types::clause::ClauseType::Keys(clause.into())) }
             }
-            Clause::Attribute(clause) => Self {
-                clause_type: Some(proto::types::clause::ClauseType::Attribute(clause.into())),
-            },
+            Clause::Member(clause) => {
+                Self { clause_type: Some(proto::types::clause::ClauseType::Member(clause.into())) }
+            }
             Clause::Composite(clause) => Self {
                 clause_type: Some(proto::types::clause::ClauseType::Composite(clause.into())),
             },
@@ -148,11 +150,11 @@ impl TryFrom<proto::types::KeysClause> for KeysClause {
     }
 }
 
-impl From<AttributeClause> for proto::types::AttributeClause {
-    fn from(value: AttributeClause) -> Self {
+impl From<MemberClause> for proto::types::MemberClause {
+    fn from(value: MemberClause) -> Self {
         Self {
             model: value.model,
-            attribute: value.attribute,
+            member: value.member,
             operator: value.operator as i32,
             value: Some(value.value.into()),
         }

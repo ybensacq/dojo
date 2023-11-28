@@ -29,6 +29,38 @@ message ModelMetadata {
     bytes schema = 6;
 }
 
+message Enum {
+    // Variant
+    uint32 option = 1;
+    // Variants of the enum
+    repeated string options = 2;
+}
+
+message Member {
+    // Name of the member
+    string name = 1;
+    // Type of member
+    oneof member_type {
+        Value value = 2;
+        Enum enum = 3;
+        Model struct = 4;
+    }
+}
+
+message Model {
+    // Name of the model
+    string name = 1;
+    // Members of the model
+    repeated Member members = 2;
+}
+
+message Entity {
+    // The entity key
+    bytes key = 1;
+    // Models of the entity
+    repeated Model models = 2;
+}
+
 message StorageEntry {
     // The key of the changed value
     string key = 1;
@@ -55,12 +87,14 @@ message EntityUpdate {
 
 message EntityQuery {
     Clause clause = 1;
+    uint32 limit = 2;
+    uint32 offset = 3;
 }
 
 message Clause {
     oneof clause_type {
         KeysClause keys = 1;
-        AttributeClause attribute = 2;
+        MemberClause member = 2;
         CompositeClause composite = 3;
     }
 }
@@ -70,9 +104,9 @@ message KeysClause {
     repeated bytes keys = 2;
 }
 
-message AttributeClause {
+message MemberClause {
     string model = 1;
-    string attribute = 2;
+    string member = 2;
     ComparisonOperator operator = 3;
     Value value = 4;
 }

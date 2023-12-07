@@ -10,8 +10,8 @@ use crate::sequencer::KatanaSequencer;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Copy, PartialEq, Eq)]
 pub struct HookerAddresses {
-    orderbook_arkchain: FieldElement,
-    executor_starknet: FieldElement,
+    pub orderbook_arkchain: FieldElement,
+    pub executor_starknet: FieldElement,
 }
 
 #[async_trait]
@@ -71,5 +71,5 @@ pub trait KatanaHooker {
     /// # Arguments
     ///
     /// * `addresses` - Important addresses related to solis.
-    fn set_addresses(&self, addresses: HookerAddresses);
+    fn set_addresses(&mut self, addresses: HookerAddresses);
 }

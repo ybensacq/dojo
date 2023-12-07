@@ -8,6 +8,12 @@ use starknet::core::types::{BroadcastedInvokeTransaction, FieldElement};
 
 use crate::sequencer::KatanaSequencer;
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Copy, PartialEq, Eq)]
+pub struct HookerAddresses {
+    orderbook_arkchain: FieldElement,
+    executor_starknet: FieldElement,
+}
+
 #[async_trait]
 pub trait KatanaHooker {
     /// Sets a reference to the underlying sequencer.
@@ -59,4 +65,11 @@ pub trait KatanaHooker {
     /// * `call` - The `Call` of the transaction that has failed. Usually the same as
     ///   `verify_message_to_starknet_before_tx`.
     async fn on_starknet_tx_failed(&self, call: Call);
+
+    /// Sets important addresses.
+    ///
+    /// # Arguments
+    ///
+    /// * `addresses` - Important addresses related to solis.
+    fn set_addresses(&self, addresses: &HookerAddresses);
 }

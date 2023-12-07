@@ -3,6 +3,7 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::error::CallError;
 use jsonrpsee::types::ErrorObject;
 use katana_core::accounts::Account;
+use katana_core::hooker::HookerAddresses;
 use starknet::core::types::FieldElement;
 
 #[derive(thiserror::Error, Clone, Copy, Debug)]
@@ -24,6 +25,9 @@ impl From<KatanaApiError> for Error {
 
 #[rpc(server, namespace = "katana")]
 pub trait KatanaApi {
+    #[method(name = "setSolisAddresses")]
+    async fn set_addresses(&self, addresses: HookerAddresses) -> Result<(), Error>;
+
     #[method(name = "generateBlock")]
     async fn generate_block(&self) -> Result<(), Error>;
 

@@ -25,7 +25,7 @@ use crate::backend::storage::transaction::{
 use crate::backend::{Backend, ExternalFunctionCall};
 use crate::db::{AsStateRefDb, StateExtRef, StateRefDb};
 use crate::execution::{MaybeInvalidExecutedTransaction, PendingState};
-use crate::hooker::KatanaHooker;
+use crate::hooker::{HookerAddresses, KatanaHooker};
 use crate::pool::TransactionPool;
 use crate::sequencer_error::SequencerError;
 use crate::service::block_producer::{BlockProducer, BlockProducerMode};
@@ -94,6 +94,10 @@ impl KatanaSequencer {
         });
 
         Self { pool, config, backend, block_producer, hooker }
+    }
+
+    pub async fn set_addresses(&self, addresses: &HookerAddresses) {
+        self.hooker.read().await.set_addresses(addresses);
     }
 
     /// Returns the pending state if the sequencer is running in _interval_ mode. Otherwise `None`.

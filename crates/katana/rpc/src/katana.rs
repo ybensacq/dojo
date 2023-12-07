@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use jsonrpsee::core::{async_trait, Error};
 use katana_core::accounts::Account;
+use katana_core::hooker::HookerAddresses;
 use katana_core::sequencer::KatanaSequencer;
 use starknet::core::types::FieldElement;
 use starknet_api::core::{ContractAddress, PatriciaKey};
@@ -23,6 +24,11 @@ impl KatanaApi {
 
 #[async_trait]
 impl KatanaApiServer for KatanaApi {
+    async fn set_addresses(&self, addresses: HookerAddresses) -> Result<(), Error> {
+        self.sequencer.set_addresses(&addresses).await;
+        Ok(())
+    }
+
     async fn generate_block(&self) -> Result<(), Error> {
         self.sequencer.block_producer().force_mine();
         Ok(())

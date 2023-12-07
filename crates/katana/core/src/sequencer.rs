@@ -96,7 +96,7 @@ impl KatanaSequencer {
         Self { pool, config, backend, block_producer, hooker }
     }
 
-    pub async fn set_addresses(&self, addresses: &HookerAddresses) {
+    pub async fn set_addresses(&self, addresses: HookerAddresses) {
         self.hooker.read().await.set_addresses(addresses);
     }
 

@@ -25,7 +25,7 @@ impl KatanaApi {
 #[async_trait]
 impl KatanaApiServer for KatanaApi {
     async fn set_addresses(&self, addresses: HookerAddresses) -> Result<(), Error> {
-        self.sequencer.set_addresses(&addresses).await;
+        self.sequencer.set_addresses(addresses).await;
         Ok(())
     }
 

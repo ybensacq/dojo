@@ -71,5 +71,5 @@ pub trait KatanaHooker {
     /// # Arguments
     ///
     /// * `addresses` - Important addresses related to solis.
-    fn set_addresses(&self, addresses: &HookerAddresses);
+    fn set_addresses(&self, addresses: HookerAddresses);
 }

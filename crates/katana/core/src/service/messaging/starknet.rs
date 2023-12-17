@@ -3,27 +3,22 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use katana_primitives::receipt::MessageToL1;
+use katana_primitives::transaction::L1HandlerTx;
+use katana_primitives::utils::transaction::compute_l1_message_hash;
 use starknet::accounts::{Account, Call, ExecutionEncoding, SingleOwnerAccount};
-use starknet::core::types::{BlockId, BlockTag, EmittedEvent, EventFilter, FieldElement, MsgToL1};
+use starknet::core::types::{BlockId, BlockTag, EmittedEvent, EventFilter, FieldElement};
 use starknet::core::utils::starknet_keccak;
 use starknet::macros::{felt, selector};
 use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::{AnyProvider, JsonRpcClient, Provider};
 use starknet::signers::{LocalWallet, SigningKey};
-use starknet_api::core::{ContractAddress, EntryPointSelector, Nonce};
-use starknet_api::hash::StarkFelt;
-use starknet_api::stark_felt;
-use starknet_api::transaction::{
-    Calldata, L1HandlerTransaction as ApiL1HandlerTransaction, TransactionHash, TransactionVersion,
-};
-use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{debug, error, trace, warn};
 use url::Url;
 
-use super::{Error, MessagingConfig, Messenger, MessengerResult, LOG_TARGET};
-use crate::backend::storage::transaction::L1HandlerTransaction;
 use crate::hooker::KatanaHooker;
-use crate::utils::transaction::compute_l1_handler_transaction_hash_felts;
+
+use super::{Error, MessagingConfig, Messenger, MessengerResult, LOG_TARGET};
 
 /// As messaging in starknet is only possible with EthAddress in the `to_address`
 /// field, we have to set magic value to understand what the user want to do.
@@ -169,7 +164,7 @@ impl StarknetMessaging {
 #[async_trait]
 impl Messenger for StarknetMessaging {
     type MessageHash = FieldElement;
-    type MessageTransaction = L1HandlerTransaction;
+    type MessageTransaction = L1HandlerTx;
 
     async fn gather_messages(
         &self,
@@ -200,7 +195,7 @@ impl Messenger for StarknetMessaging {
             chain_latest_block
         };
 
-        let mut l1_handler_txs: Vec<L1HandlerTransaction> = vec![];
+        let mut l1_handler_txs: Vec<L1HandlerTx> = vec![];
 
         for (block_number, block_events) in self
             .fetch_events(BlockId::Number(from_block), BlockId::Number(to_block))
@@ -244,7 +239,10 @@ impl Messenger for StarknetMessaging {
         Ok((to_block, l1_handler_txs))
     }
 
-    async fn send_messages(&self, messages: &[MsgToL1]) -> MessengerResult<Vec<Self::MessageHash>> {
+    async fn send_messages(
+        &self,
+        messages: &[MessageToL1],
+    ) -> MessengerResult<Vec<Self::MessageHash>> {
         if messages.is_empty() {
             return Ok(vec![]);
         }
@@ -282,7 +280,7 @@ impl Messenger for StarknetMessaging {
 ///
 /// Messages can also be labelled as EXE, which in this case generate a `Call`
 /// additionally to the hash.
-fn parse_messages(messages: &[MsgToL1]) -> MessengerResult<(Vec<FieldElement>, Vec<Call>)> {
+fn parse_messages(messages: &[MessageToL1]) -> MessengerResult<(Vec<FieldElement>, Vec<Call>)> {
     let mut hashes: Vec<FieldElement> = vec![];
     let mut calls: Vec<Call> = vec![];
 
@@ -345,21 +343,11 @@ fn parse_messages(messages: &[MsgToL1]) -> MessengerResult<(Vec<FieldElement>, V
     Ok((hashes, calls))
 }
 
-// TODO: this will be reworked in Katana main to use `MsgToL2` from starknet-rs.
-struct MessageToL2Info {
-    pub from_address: FieldElement,
-    pub to_address: FieldElement,
-    pub selector: FieldElement,
-}
-
-fn l1_handler_tx_from_event(
-    event: &EmittedEvent,
-    chain_id: FieldElement,
-) -> Result<(L1HandlerTransaction, MessageToL2Info)> {
+fn l1_handler_tx_from_event(event: &EmittedEvent, chain_id: FieldElement) -> Result<L1HandlerTx> {
     if event.keys[0] != selector!("MessageSentToAppchain") {
         debug!(
             target: LOG_TARGET,
-            "Event with key {:?} can't be converted into L1HandlerTransaction", event.keys[0],
+            "Event with key {:?} can't be converted into L1HandlerTx", event.keys[0],
         );
         return Err(Error::GatherError.into());
     }
@@ -371,55 +359,36 @@ fn l1_handler_tx_from_event(
     // See contrat appchain_messaging.cairo for MessageSentToAppchain event.
     let from_address = event.keys[2];
     let to_address = event.keys[3];
-    let selector = event.data[0];
+    let entry_point_selector = event.data[0];
     let nonce = event.data[1];
-    let version = 0_u32;
-
-    let info = MessageToL2Info { from_address, to_address, selector };
 
     // Skip the length of the serialized array for the payload which is data[2].
     // Payload starts at data[3].
     let mut calldata = vec![from_address];
     calldata.extend(&event.data[3..]);
 
-    let tx_hash = compute_l1_handler_transaction_hash_felts(
-        version.into(),
-        to_address,
-        selector,
-        &calldata,
-        chain_id,
+    let message_hash = compute_l1_message_hash(from_address, to_address, &calldata);
+
+    Ok(L1HandlerTx {
         nonce,
-    );
-
-    let calldata: Vec<StarkFelt> = calldata.iter().map(|f| StarkFelt::from(*f)).collect();
-    let calldata = Calldata(calldata.into());
-
-    let tx = L1HandlerTransaction {
-        inner: ApiL1HandlerTransaction {
-            transaction_hash: TransactionHash(tx_hash.into()),
-            version: TransactionVersion(stark_felt!(version)),
-            nonce: Nonce(nonce.into()),
-            contract_address: ContractAddress::try_from(<FieldElement as Into<StarkFelt>>::into(
-                to_address,
-            ))
-            .unwrap(),
-            entry_point_selector: EntryPointSelector(selector.into()),
-            calldata,
-        },
+        calldata,
+        chain_id,
+        message_hash,
         // This is the min value paid on L1 for the message to be sent to L2.
-        paid_l1_fee: 30000_u128,
-    };
-
-    Ok((tx, info))
+        paid_fee_on_l1: 30000_u128,
+        entry_point_selector,
+        version: FieldElement::ZERO,
+        contract_address: to_address.into(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
 
+    use katana_primitives::utils::transaction::compute_l1_handler_tx_hash;
     use starknet::macros::felt;
 
     use super::*;
-    use crate::utils::transaction::stark_felt_to_field_element_array;
 
     #[test]
     fn parse_messages_msg() {
@@ -430,8 +399,16 @@ mod tests {
         let payload_exe = vec![to_address, selector, FieldElement::ONE, FieldElement::TWO];
 
         let messages = vec![
-            MsgToL1 { from_address, to_address: MSG_MAGIC, payload: payload_msg },
-            MsgToL1 { from_address, to_address: EXE_MAGIC, payload: payload_exe.clone() },
+            MessageToL1 {
+                from_address: from_address.into(),
+                to_address: MSG_MAGIC,
+                payload: payload_msg,
+            },
+            MessageToL1 {
+                from_address: from_address.into(),
+                to_address: EXE_MAGIC,
+                payload: payload_exe.clone(),
+            },
         ];
 
         let (hashes, calls) = parse_messages(&messages).unwrap();
@@ -460,7 +437,11 @@ mod tests {
         let from_address = selector!("from_address");
         let payload_msg = vec![];
 
-        let messages = vec![MsgToL1 { from_address, to_address: MSG_MAGIC, payload: payload_msg }];
+        let messages = vec![MessageToL1 {
+            from_address: from_address.into(),
+            to_address: MSG_MAGIC,
+            payload: payload_msg,
+        }];
 
         parse_messages(&messages).unwrap();
     }
@@ -471,7 +452,11 @@ mod tests {
         let from_address = selector!("from_address");
         let payload_exe = vec![FieldElement::ONE];
 
-        let messages = vec![MsgToL1 { from_address, to_address: EXE_MAGIC, payload: payload_exe }];
+        let messages = vec![MessageToL1 {
+            from_address: from_address.into(),
+            to_address: EXE_MAGIC,
+            payload: payload_exe,
+        }];
 
         parse_messages(&messages).unwrap();
     }
@@ -483,12 +468,13 @@ mod tests {
         let selector = selector!("selector");
         let chain_id = selector!("KATANA");
         let nonce = FieldElement::ONE;
-        let calldata: Vec<StarkFelt> = vec![from_address.into(), FieldElement::THREE.into()];
-        let transaction_hash: FieldElement = compute_l1_handler_transaction_hash_felts(
+        let calldata = vec![from_address, FieldElement::THREE];
+
+        let transaction_hash: FieldElement = compute_l1_handler_tx_hash(
             FieldElement::ZERO,
             to_address,
             selector,
-            &stark_felt_to_field_element_array(&calldata),
+            &calldata,
             chain_id,
             nonce,
         );
@@ -514,24 +500,22 @@ mod tests {
             transaction_hash,
         };
 
-        let expected = L1HandlerTransaction {
-            inner: ApiL1HandlerTransaction {
-                transaction_hash: TransactionHash(transaction_hash.into()),
-                version: TransactionVersion(stark_felt!(0_u32)),
-                nonce: Nonce(nonce.into()),
-                contract_address: ContractAddress::try_from(
-                    <FieldElement as Into<StarkFelt>>::into(to_address),
-                )
-                .unwrap(),
-                entry_point_selector: EntryPointSelector(selector.into()),
-                calldata: Calldata(calldata.into()),
-            },
-            paid_l1_fee: 30000_u128,
+        let message_hash = compute_l1_message_hash(from_address, to_address, &calldata);
+
+        let expected = L1HandlerTx {
+            nonce,
+            calldata,
+            chain_id,
+            message_hash,
+            paid_fee_on_l1: 30000_u128,
+            version: FieldElement::ZERO,
+            entry_point_selector: selector,
+            contract_address: to_address.into(),
         };
 
         let (tx, _) = l1_handler_tx_from_event(&event, chain_id).unwrap();
 
-        assert_eq!(tx.inner, expected.inner);
+        assert_eq!(tx, expected);
     }
 
     #[test]
@@ -541,7 +525,7 @@ mod tests {
         let to_address = selector!("to_address");
         let selector = selector!("selector");
         let nonce = FieldElement::ONE;
-        let calldata: Vec<StarkFelt> = vec![from_address.into(), FieldElement::THREE.into()];
+        let calldata = vec![from_address, FieldElement::THREE];
         let transaction_hash = FieldElement::ZERO;
 
         let event = EmittedEvent {
@@ -575,7 +559,7 @@ mod tests {
         let _to_address = selector!("to_address");
         let _selector = selector!("selector");
         let _nonce = FieldElement::ONE;
-        let _calldata: Vec<StarkFelt> = vec![from_address.into(), FieldElement::THREE.into()];
+        let _calldata = vec![from_address, FieldElement::THREE];
         let transaction_hash = FieldElement::ZERO;
 
         let event = EmittedEvent {

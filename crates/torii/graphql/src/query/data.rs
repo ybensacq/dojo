@@ -1,7 +1,6 @@
 use async_graphql::connection::PageInfo;
-use sqlx::pool::PoolConnection;
 use sqlx::sqlite::SqliteRow;
-use sqlx::{Result, Row, Sqlite};
+use sqlx::{Result, Row, SqliteConnection};
 
 use super::filter::{Filter, FilterValue};
 use super::order::{CursorDirection, Direction, Order};
@@ -9,7 +8,7 @@ use crate::constants::DEFAULT_LIMIT;
 use crate::object::connection::{cursor, ConnectionArguments};
 
 pub async fn count_rows(
-    conn: &mut PoolConnection<Sqlite>,
+    conn: &mut SqliteConnection,
     table_name: &str,
     keys: &Option<Vec<String>>,
     filters: &Option<Vec<Filter>>,
@@ -25,8 +24,14 @@ pub async fn count_rows(
     Ok(result.0)
 }
 
+pub async fn fetch_world_address(conn: &mut SqliteConnection) -> Result<String> {
+    let query = "SELECT world_address FROM worlds".to_string();
+    let res: (String,) = sqlx::query_as(&query).fetch_one(conn).await?;
+    Ok(res.0)
+}
+
 pub async fn fetch_single_row(
-    conn: &mut PoolConnection<Sqlite>,
+    conn: &mut SqliteConnection,
     table_name: &str,
     id_column: &str,
     id: &str,
@@ -37,7 +42,7 @@ pub async fn fetch_single_row(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn fetch_multiple_rows(
-    conn: &mut PoolConnection<Sqlite>,
+    conn: &mut SqliteConnection,
     table_name: &str,
     id_column: &str,
     keys: &Option<Vec<String>>,

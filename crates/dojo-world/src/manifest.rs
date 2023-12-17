@@ -15,9 +15,7 @@ use starknet::core::utils::{
     ParseCairoShortStringError,
 };
 use starknet::macros::selector;
-use starknet::providers::{
-    MaybeUnknownErrorCode, Provider, ProviderError, StarknetErrorWithMessage,
-};
+use starknet::providers::{Provider, ProviderError};
 use thiserror::Error;
 
 use crate::contracts::model::ModelError;
@@ -28,9 +26,9 @@ use crate::contracts::WorldContractReader;
 #[path = "manifest_test.rs"]
 mod test;
 
-pub const WORLD_CONTRACT_NAME: &str = "world";
-pub const EXECUTOR_CONTRACT_NAME: &str = "executor";
-pub const BASE_CONTRACT_NAME: &str = "base";
+pub const WORLD_CONTRACT_NAME: &str = "dojo::world::world";
+pub const EXECUTOR_CONTRACT_NAME: &str = "dojo::executor::executor";
+pub const BASE_CONTRACT_NAME: &str = "dojo::base::base";
 
 #[derive(Error, Debug)]
 pub enum ManifestError {
@@ -168,10 +166,9 @@ impl Manifest {
 
         let world_class_hash =
             provider.get_class_hash_at(BLOCK_ID, world_address).await.map_err(|err| match err {
-                ProviderError::StarknetError(StarknetErrorWithMessage {
-                    code: MaybeUnknownErrorCode::Known(StarknetError::ContractNotFound),
-                    ..
-                }) => ManifestError::RemoteWorldNotFound,
+                ProviderError::StarknetError(StarknetError::ContractNotFound) => {
+                    ManifestError::RemoteWorldNotFound
+                }
                 err => err.into(),
             })?;
 
@@ -184,10 +181,9 @@ impl Manifest {
             .get_class_hash_at(BLOCK_ID, executor_address)
             .await
             .map_err(|err| match err {
-                ProviderError::StarknetError(StarknetErrorWithMessage {
-                    code: MaybeUnknownErrorCode::Known(StarknetError::ContractNotFound),
-                    ..
-                }) => ManifestError::ExecutorNotFound,
+                ProviderError::StarknetError(StarknetError::ContractNotFound) => {
+                    ManifestError::ExecutorNotFound
+                }
                 err => err.into(),
             })?;
 
@@ -290,10 +286,7 @@ where
         {
             Ok(res) => parse_cairo_short_string(&res[0])?.into(),
 
-            Err(ProviderError::StarknetError(StarknetErrorWithMessage {
-                code: MaybeUnknownErrorCode::Known(StarknetError::ContractError),
-                ..
-            })) => SmolStr::from(""),
+            Err(ProviderError::StarknetError(StarknetError::ContractError(_))) => SmolStr::from(""),
 
             Err(err) => return Err(err.into()),
         };

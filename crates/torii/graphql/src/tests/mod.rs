@@ -37,6 +37,7 @@ mod subscription_test;
 use crate::schema::build_schema;
 
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Connection<T> {
     pub total_count: i64,
     pub edges: Vec<Edge<T>>,
@@ -50,13 +51,14 @@ pub struct Edge<T> {
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Entity {
-    pub model_names: String,
     pub keys: Option<Vec<String>>,
     pub created_at: Option<String>,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 // same as type from `async-graphql` but derive necessary traits
 // https://docs.rs/async-graphql/6.0.10/async_graphql/types/connection/struct.PageInfo.html
 pub struct PageInfo {
@@ -64,27 +66,6 @@ pub struct PageInfo {
     pub has_next_page: bool,
     pub start_cursor: Option<String>,
     pub end_cursor: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Moves {
-    pub __typename: String,
-    pub remaining: u32,
-    pub last_direction: String,
-    pub entity: Option<Entity>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Vec2 {
-    pub x: u32,
-    pub y: u32,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Position {
-    pub __typename: String,
-    pub vec: Vec2,
-    pub entity: Option<Entity>,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -151,6 +132,7 @@ pub struct Social {
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Content {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -161,8 +143,10 @@ pub struct Content {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Metadata {
     pub uri: String,
+    pub world_address: String,
     pub icon_img: String,
     pub cover_img: String,
     pub content: Content,
@@ -211,7 +195,7 @@ pub async fn model_fixtures(db: &mut Sql) {
                     ty: Ty::Primitive(Primitive::U32(None)),
                 },
                 Member {
-                    name: "type_u16".to_string(),
+                    name: "typeU16".to_string(),
                     key: false,
                     ty: Ty::Primitive(Primitive::U16(None)),
                 },
@@ -221,7 +205,7 @@ pub async fn model_fixtures(db: &mut Sql) {
                     ty: Ty::Primitive(Primitive::U64(None)),
                 },
                 Member {
-                    name: "type_bool".to_string(),
+                    name: "typeBool".to_string(),
                     key: false,
                     ty: Ty::Primitive(Primitive::Bool(None)),
                 },
@@ -231,7 +215,7 @@ pub async fn model_fixtures(db: &mut Sql) {
                     ty: Ty::Primitive(Primitive::Felt252(None)),
                 },
                 Member {
-                    name: "type_contract_address".to_string(),
+                    name: "typeContractAddress".to_string(),
                     key: true,
                     ty: Ty::Primitive(Primitive::ContractAddress(None)),
                 },
@@ -270,7 +254,8 @@ pub async fn spinup_types_test() -> Result<SqlitePool> {
     execute_strategy(&ws, &migration, &account, None).await.unwrap();
 
     //  Execute `create` and insert 10 records into storage
-    let records_contract = "0x2e6254aaf7e47502319f35de01376cece263f9b83afe6169a4b3a76ef47c8a3";
+
+    let records_contract = "0x7b44a597f4027588f226293105c77c99c436ab4016bbcb51f6711ab1ccfeeb0";
     let InvokeTransactionResult { transaction_hash } = account
         .execute(vec![Call {
             calldata: vec![FieldElement::from_str("0xa").unwrap()],

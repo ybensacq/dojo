@@ -1,6 +1,8 @@
 syntax = "proto3";
 package types;
 
+import "schema.proto";
+
 message WorldMetadata {
     // The hex-encoded address of the world.
     string world_address = 1;
@@ -29,34 +31,13 @@ message ModelMetadata {
     bytes schema = 6;
 }
 
-message Enum {
-    // Variant
-    uint32 option = 1;
-    // Variants of the enum
-    repeated string options = 2;
-}
-
-message Member {
-    // Name of the member
-    string name = 1;
-    // Type of member
-    oneof member_type {
-        Value value = 2;
-        Enum enum = 3;
-        Model struct = 4;
-    }
-}
-
 message Model {
-    // Name of the model
     string name = 1;
-    // Members of the model
     repeated Member members = 2;
 }
-
 message Entity {
-    // The entity key
-    bytes key = 1;
+    // The entity id
+    bytes id = 1;
     // Models of the entity
     repeated Model models = 2;
 }
@@ -75,17 +56,17 @@ message StorageDiff {
     repeated StorageEntry storage_entries = 2;
 }
 
-message EntityDiff {
+message ModelDiff {
     // Storage diffs
     repeated StorageDiff storage_diffs = 1;
 }
 
-message EntityUpdate {
+message ModelUpdate {
     string block_hash = 1;
-    EntityDiff entity_diff = 2;
+    ModelDiff model_diff = 2;
 }
 
-message EntityQuery {
+message Query {
     Clause clause = 1;
     uint32 limit = 2;
     uint32 offset = 3;
@@ -93,10 +74,15 @@ message EntityQuery {
 
 message Clause {
     oneof clause_type {
-        KeysClause keys = 1;
-        MemberClause member = 2;
-        CompositeClause composite = 3;
+        IdsClause ids = 1;
+        KeysClause keys = 2;
+        MemberClause member = 3;
+        CompositeClause composite = 4;
     }
+}
+
+message IdsClause {
+    repeated bytes ids = 1;
 }
 
 message KeysClause {
@@ -129,14 +115,4 @@ enum ComparisonOperator {
     GTE = 3;
     LT = 4;
     LTE = 5;
-}
-
-message Value {
-    oneof value_type {
-        string string_value = 1;
-        int64 int_value = 2;
-        uint64 uint_value = 3;
-        bool bool_value = 4;
-        bytes byte_value = 5;
-    }
 }

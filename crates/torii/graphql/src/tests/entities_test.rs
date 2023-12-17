@@ -16,19 +16,18 @@ mod tests {
             r#"
           {{
             entities {} {{
-              total_count
+              totalCount
               edges {{
                 cursor
                 node {{
                   keys
-                  model_names
                 }}
               }}
-              page_info {{
-                has_previous_page
-                has_next_page
-                start_cursor
-                end_cursor
+              pageInfo {{
+                hasPreviousPage
+                hasNextPage
+                startCursor
+                endCursor
               }}
             }}
           }}
@@ -46,7 +45,6 @@ mod tests {
           {{
             entity (id: "{:#x}") {{
               keys
-              model_names
               models {{
                 ... on Record {{
                   __typename
@@ -93,12 +91,8 @@ mod tests {
         // default without params
         let entities = entities_query(&schema, "").await;
         let connection: Connection<Entity> = serde_json::from_value(entities).unwrap();
-        let first_entity = connection.edges.first().unwrap();
-        let last_entity = connection.edges.last().unwrap();
         assert_eq!(connection.edges.len(), 10);
         assert_eq!(connection.total_count, 20);
-        assert_eq!(&first_entity.node.model_names, "Subrecord");
-        assert_eq!(&last_entity.node.model_names, "Record,RecordSibling");
 
         // first key param - returns all entities with `0x0` as first key
         let entities = entities_query(&schema, "(keys: [\"0x0\"])").await;
@@ -121,7 +115,7 @@ mod tests {
         // pagination testing
         let entities = entities_query(&schema, "(first: 20)").await;
         let all_entities_connection: Connection<Entity> = serde_json::from_value(entities).unwrap();
-        let one = all_entities_connection.edges.get(0).unwrap();
+        let one = all_entities_connection.edges.first().unwrap();
         let two = all_entities_connection.edges.get(1).unwrap();
         let three = all_entities_connection.edges.get(2).unwrap();
         let four = all_entities_connection.edges.get(3).unwrap();

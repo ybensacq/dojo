@@ -1,6 +1,5 @@
-pub mod error;
 pub mod logger;
-pub mod subscription;
+pub mod subscriptions;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -8,12 +7,11 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use dojo_types::primitive::Primitive;
-use dojo_types::schema::{Struct, Ty};
+use dojo_types::schema::Ty;
 use futures::Stream;
 use proto::world::{
     MetadataRequest, MetadataResponse, RetrieveEntitiesRequest, RetrieveEntitiesResponse,
-    SubscribeEntitiesRequest, SubscribeEntitiesResponse,
+    SubscribeModelsRequest, SubscribeModelsResponse,
 };
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Pool, Row, Sqlite};
@@ -28,19 +26,22 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use torii_core::cache::ModelCache;
 use torii_core::error::{Error, ParseError, QueryError};
-use torii_core::model::build_sql_query;
+use torii_core::model::{build_sql_query, map_row_to_ty};
 
-use self::subscription::SubscribeRequest;
+use self::subscriptions::entity::EntityManager;
+use self::subscriptions::model_diff::{ModelDiffRequest, StateDiffManager};
 use crate::proto::types::clause::ClauseType;
 use crate::proto::world::world_server::WorldServer;
+use crate::proto::world::{SubscribeEntitiesRequest, SubscribeEntityResponse};
 use crate::proto::{self};
 
 #[derive(Clone)]
 pub struct DojoWorld {
-    world_address: FieldElement,
     pool: Pool<Sqlite>,
-    subscriber_manager: Arc<subscription::SubscriberManager>,
+    world_address: FieldElement,
     model_cache: Arc<ModelCache>,
+    entity_manager: Arc<EntityManager>,
+    state_diff_manager: Arc<StateDiffManager>,
 }
 
 impl DojoWorld {
@@ -50,18 +51,24 @@ impl DojoWorld {
         world_address: FieldElement,
         provider: Arc<JsonRpcClient<HttpTransport>>,
     ) -> Self {
-        let subscriber_manager = Arc::new(subscription::SubscriberManager::default());
+        let model_cache = Arc::new(ModelCache::new(pool.clone()));
+        let entity_manager = Arc::new(EntityManager::default());
+        let state_diff_manager = Arc::new(StateDiffManager::default());
 
-        tokio::task::spawn(subscription::Service::new_with_block_rcv(
+        tokio::task::spawn(subscriptions::model_diff::Service::new_with_block_rcv(
             block_rx,
             world_address,
             provider,
-            Arc::clone(&subscriber_manager),
+            Arc::clone(&state_diff_manager),
         ));
 
-        let model_cache = Arc::new(ModelCache::new(pool.clone()));
+        tokio::task::spawn(subscriptions::entity::Service::new(
+            pool.clone(),
+            Arc::clone(&entity_manager),
+            Arc::clone(&model_cache),
+        ));
 
-        Self { pool, model_cache, world_address, subscriber_manager }
+        Self { pool, world_address, model_cache, entity_manager, state_diff_manager }
     }
 }
 
@@ -108,6 +115,78 @@ impl DojoWorld {
         })
     }
 
+    async fn entities_all(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<proto::types::Entity>, Error> {
+        self.entities_by_ids(None, limit, offset).await
+    }
+
+    async fn entities_by_ids(
+        &self,
+        ids_clause: Option<proto::types::IdsClause>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<proto::types::Entity>, Error> {
+        // TODO: use prepared statement for where clause
+        let filter_ids = match ids_clause {
+            Some(ids_clause) => {
+                let ids = ids_clause
+                    .ids
+                    .iter()
+                    .map(|id| {
+                        Ok(FieldElement::from_byte_slice_be(id)
+                            .map(|id| format!("entities.id = '{id:#x}'"))
+                            .map_err(ParseError::FromByteSliceError)?)
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+
+                format!("WHERE {}", ids.join(" OR "))
+            }
+            None => String::new(),
+        };
+
+        let query = format!(
+            r#"
+            SELECT entities.id, group_concat(entity_model.model_id) as model_names
+            FROM entities
+            JOIN entity_model ON entities.id = entity_model.entity_id
+            {filter_ids}
+            GROUP BY entities.id
+            ORDER BY entities.event_id DESC
+            LIMIT ? OFFSET ?
+         "#
+        );
+
+        let db_entities: Vec<(String, String)> =
+            sqlx::query_as(&query).bind(limit).bind(offset).fetch_all(&self.pool).await?;
+
+        let mut entities = Vec::with_capacity(db_entities.len());
+        for (entity_id, models_str) in db_entities {
+            let model_names: Vec<&str> = models_str.split(',').collect();
+            let schemas = self.model_cache.schemas(model_names).await?;
+
+            let entity_query = format!("{} WHERE entities.id = ?", build_sql_query(&schemas)?);
+            let row = sqlx::query(&entity_query).bind(&entity_id).fetch_one(&self.pool).await?;
+
+            let models = schemas
+                .iter()
+                .map(|s| {
+                    let mut struct_ty = s.as_struct().expect("schema should be struct").to_owned();
+                    map_row_to_ty(&s.name(), &mut struct_ty, &row)?;
+
+                    Ok(struct_ty.try_into().unwrap())
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+
+            let id = FieldElement::from_str(&entity_id).map_err(ParseError::FromStr)?;
+            entities.push(proto::types::Entity { id: id.to_bytes_be().to_vec(), models })
+        }
+
+        Ok(entities)
+    }
+
     async fn entities_by_keys(
         &self,
         keys_clause: proto::types::KeysClause,
@@ -128,39 +207,36 @@ impl DojoWorld {
             .collect::<Result<Vec<_>, Error>>()?;
         let keys_pattern = keys.join("/") + "/%";
 
-        let db_entities: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, model_names FROM entities WHERE keys LIKE ? ORDER BY event_id ASC LIMIT ? \
-             OFFSET ?",
-        )
-        .bind(&keys_pattern)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+        let models_query = format!(
+            r#"
+            SELECT group_concat(entity_model.model_id) as model_names
+            FROM entities
+            JOIN entity_model ON entities.id = entity_model.entity_id
+            WHERE entities.keys LIKE ?
+            GROUP BY entities.id
+            HAVING model_names REGEXP '(^|,){}(,|$)'
+            LIMIT 1
+        "#,
+            keys_clause.model
+        );
+        let (models_str,): (String,) =
+            sqlx::query_as(&models_query).bind(&keys_pattern).fetch_one(&self.pool).await?;
 
-        let mut entities = Vec::new();
-        for (entity_id, models_str) in db_entities {
-            let model_names: Vec<&str> = models_str.split(',').collect();
-            let mut schemas = Vec::new();
-            for model in &model_names {
-                schemas.push(self.model_cache.schema(model).await?);
-            }
+        let model_names = models_str.split(',').collect::<Vec<&str>>();
+        let schemas = self.model_cache.schemas(model_names).await?;
 
-            let entity_query =
-                format!("{} WHERE {}.entity_id = ?", build_sql_query(&schemas)?, schemas[0].name());
-            let row = sqlx::query(&entity_query).bind(&entity_id).fetch_one(&self.pool).await?;
+        let entities_query = format!(
+            "{} WHERE entities.keys LIKE ? ORDER BY entities.event_id DESC LIMIT ? OFFSET ?",
+            build_sql_query(&schemas)?
+        );
+        let db_entities = sqlx::query(&entities_query)
+            .bind(&keys_pattern)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
 
-            let mut models = Vec::new();
-            for schema in schemas {
-                let struct_ty = schema.as_struct().expect("schema should be struct");
-                models.push(Self::map_row_to_model(&schema.name(), struct_ty, &row)?);
-            }
-
-            let key = FieldElement::from_str(&entity_id).map_err(ParseError::FromStr)?;
-            entities.push(proto::types::Entity { key: key.to_bytes_be().to_vec(), models })
-        }
-
-        Ok(entities)
+        db_entities.iter().map(|row| Self::map_row_to_entity(row, &schemas)).collect()
     }
 
     async fn entities_by_attribute(
@@ -210,143 +286,107 @@ impl DojoWorld {
         })
     }
 
-    async fn subscribe_entities(
+    async fn subscribe_models(
         &self,
-        entities_keys: Vec<proto::types::KeysClause>,
-    ) -> Result<Receiver<Result<proto::world::SubscribeEntitiesResponse, tonic::Status>>, Error>
-    {
-        let mut subs = Vec::with_capacity(entities_keys.len());
-        for keys in entities_keys {
+        models_keys: Vec<proto::types::KeysClause>,
+    ) -> Result<Receiver<Result<proto::world::SubscribeModelsResponse, tonic::Status>>, Error> {
+        let mut subs = Vec::with_capacity(models_keys.len());
+        for keys in models_keys {
             let model = cairo_short_string_to_felt(&keys.model)
                 .map_err(ParseError::CairoShortStringToFelt)?;
 
             let proto::types::ModelMetadata { packed_size, .. } =
                 self.model_metadata(&keys.model).await?;
 
-            subs.push(SubscribeRequest {
+            subs.push(ModelDiffRequest {
                 keys,
-                model: subscription::ModelMetadata {
+                model: subscriptions::model_diff::ModelMetadata {
                     name: model,
                     packed_size: packed_size as usize,
                 },
             });
         }
 
-        self.subscriber_manager.add_subscriber(subs).await
+        self.state_diff_manager.add_subscriber(subs).await
+    }
+
+    async fn subscribe_entities(
+        &self,
+        ids: Vec<FieldElement>,
+    ) -> Result<Receiver<Result<proto::world::SubscribeEntityResponse, tonic::Status>>, Error> {
+        self.entity_manager.add_subscriber(ids).await
     }
 
     async fn retrieve_entities(
         &self,
-        query: proto::types::EntityQuery,
+        query: proto::types::Query,
     ) -> Result<proto::world::RetrieveEntitiesResponse, Error> {
-        let clause_type = query
-            .clause
-            .ok_or(QueryError::UnsupportedQuery)?
-            .clause_type
-            .ok_or(QueryError::UnsupportedQuery)?;
+        let entities = match query.clause {
+            None => self.entities_all(query.limit, query.offset).await?,
+            Some(clause) => {
+                let clause_type =
+                    clause.clause_type.ok_or(QueryError::MissingParam("clause_type".into()))?;
 
-        let entities = match clause_type {
-            ClauseType::Keys(keys) => {
-                self.entities_by_keys(keys, query.limit, query.offset).await?
-            }
-            ClauseType::Member(attribute) => {
-                self.entities_by_attribute(attribute, query.limit, query.offset).await?
-            }
-            ClauseType::Composite(composite) => {
-                self.entities_by_composite(composite, query.limit, query.offset).await?
+                match clause_type {
+                    ClauseType::Ids(ids) => {
+                        if ids.ids.is_empty() {
+                            return Err(QueryError::MissingParam("ids".into()).into());
+                        }
+
+                        self.entities_by_ids(Some(ids), query.limit, query.offset).await?
+                    }
+                    ClauseType::Keys(keys) => {
+                        if keys.keys.is_empty() {
+                            return Err(QueryError::MissingParam("keys".into()).into());
+                        }
+
+                        if keys.model.is_empty() {
+                            return Err(QueryError::MissingParam("model".into()).into());
+                        }
+
+                        self.entities_by_keys(keys, query.limit, query.offset).await?
+                    }
+                    ClauseType::Member(attribute) => {
+                        self.entities_by_attribute(attribute, query.limit, query.offset).await?
+                    }
+                    ClauseType::Composite(composite) => {
+                        self.entities_by_composite(composite, query.limit, query.offset).await?
+                    }
+                }
             }
         };
 
         Ok(RetrieveEntitiesResponse { entities })
     }
 
-    fn map_row_to_model(
-        path: &str,
-        struct_ty: &Struct,
-        row: &SqliteRow,
-    ) -> Result<proto::types::Model, Error> {
-        let members = struct_ty
-            .children
+    fn map_row_to_entity(row: &SqliteRow, schemas: &[Ty]) -> Result<proto::types::Entity, Error> {
+        let id =
+            FieldElement::from_str(&row.get::<String, _>("id")).map_err(ParseError::FromStr)?;
+        let models = schemas
             .iter()
-            .map(|member| {
-                let column_name = format!("{}.{}", path, member.name);
-                let name = member.name.clone();
-                let member = match &member.ty {
-                    Ty::Primitive(primitive) => {
-                        let value_type = match primitive {
-                            Primitive::Bool(_) => proto::types::value::ValueType::BoolValue(
-                                row.try_get::<bool, &str>(&column_name)?,
-                            ),
-                            Primitive::U8(_)
-                            | Primitive::U16(_)
-                            | Primitive::U32(_)
-                            | Primitive::U64(_)
-                            | Primitive::USize(_) => {
-                                let value = row.try_get::<i64, &str>(&column_name)?;
-                                proto::types::value::ValueType::UintValue(value as u64)
-                            }
-                            Primitive::U128(_)
-                            | Primitive::U256(_)
-                            | Primitive::Felt252(_)
-                            | Primitive::ClassHash(_)
-                            | Primitive::ContractAddress(_) => {
-                                let value = row.try_get::<String, &str>(&column_name)?;
-                                proto::types::value::ValueType::StringValue(value)
-                            }
-                        };
+            .map(|schema| {
+                let mut struct_ty = schema.as_struct().expect("schema should be struct").to_owned();
+                map_row_to_ty(&schema.name(), &mut struct_ty, row)?;
 
-                        proto::types::Member {
-                            name,
-                            member_type: Some(proto::types::member::MemberType::Value(
-                                proto::types::Value { value_type: Some(value_type) },
-                            )),
-                        }
-                    }
-                    Ty::Enum(enum_ty) => {
-                        let value = row.try_get::<String, &str>(&column_name)?;
-                        let options = enum_ty
-                            .options
-                            .iter()
-                            .map(|e| e.name.to_string())
-                            .collect::<Vec<String>>();
-                        let option =
-                            options.iter().position(|o| o == &value).expect("wrong enum value")
-                                as u32;
-                        proto::types::Member {
-                            name: enum_ty.name.clone(),
-                            member_type: Some(proto::types::member::MemberType::Enum(
-                                proto::types::Enum { option, options },
-                            )),
-                        }
-                    }
-                    Ty::Struct(struct_ty) => {
-                        let path = [path, &struct_ty.name].join("$");
-                        proto::types::Member {
-                            name,
-                            member_type: Some(proto::types::member::MemberType::Struct(
-                                Self::map_row_to_model(&path, struct_ty, row)?,
-                            )),
-                        }
-                    }
-                    ty => {
-                        unimplemented!("unimplemented type_enum: {ty}");
-                    }
-                };
-
-                Ok(member)
+                Ok(struct_ty.try_into().unwrap())
             })
-            .collect::<Result<Vec<proto::types::Member>, Error>>()?;
+            .collect::<Result<Vec<_>, Error>>()?;
 
-        Ok(proto::types::Model { name: struct_ty.name.clone(), members })
+        Ok(proto::types::Entity { id: id.to_bytes_be().to_vec(), models })
     }
 }
 
 type ServiceResult<T> = Result<Response<T>, Status>;
+type SubscribeModelsResponseStream =
+    Pin<Box<dyn Stream<Item = Result<SubscribeModelsResponse, Status>> + Send>>;
 type SubscribeEntitiesResponseStream =
-    Pin<Box<dyn Stream<Item = Result<SubscribeEntitiesResponse, Status>> + Send>>;
+    Pin<Box<dyn Stream<Item = Result<SubscribeEntityResponse, Status>> + Send>>;
 
 #[tonic::async_trait]
 impl proto::world::world_server::World for DojoWorld {
+    type SubscribeModelsStream = SubscribeModelsResponseStream;
+    type SubscribeEntitiesStream = SubscribeEntitiesResponseStream;
+
     async fn world_metadata(
         &self,
         _request: Request<MetadataRequest>,
@@ -359,17 +399,32 @@ impl proto::world::world_server::World for DojoWorld {
         Ok(Response::new(MetadataResponse { metadata: Some(metadata) }))
     }
 
-    type SubscribeEntitiesStream = SubscribeEntitiesResponseStream;
+    async fn subscribe_models(
+        &self,
+        request: Request<SubscribeModelsRequest>,
+    ) -> ServiceResult<Self::SubscribeModelsStream> {
+        let SubscribeModelsRequest { models_keys } = request.into_inner();
+        let rx = self
+            .subscribe_models(models_keys)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::SubscribeModelsStream))
+    }
 
     async fn subscribe_entities(
         &self,
         request: Request<SubscribeEntitiesRequest>,
     ) -> ServiceResult<Self::SubscribeEntitiesStream> {
-        let SubscribeEntitiesRequest { entities_keys } = request.into_inner();
-        let rx = self
-            .subscribe_entities(entities_keys)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let SubscribeEntitiesRequest { ids } = request.into_inner();
+        let ids = ids
+            .iter()
+            .map(|id| {
+                FieldElement::from_byte_slice_be(id)
+                    .map_err(|e| Status::invalid_argument(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let rx = self.subscribe_entities(ids).await.map_err(|e| Status::internal(e.to_string()))?;
+
         Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as Self::SubscribeEntitiesStream))
     }
 

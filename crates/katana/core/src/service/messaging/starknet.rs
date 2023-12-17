@@ -1,3 +1,8 @@
+// SOLIS
+use tokio::sync::RwLock as AsyncRwLock;
+use crate::hooker::KatanaHooker;
+//
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,8 +20,6 @@ use starknet::providers::{AnyProvider, JsonRpcClient, Provider};
 use starknet::signers::{LocalWallet, SigningKey};
 use tracing::{debug, error, trace, warn};
 use url::Url;
-
-use crate::hooker::KatanaHooker;
 
 use super::{Error, MessagingConfig, Messenger, MessengerResult, LOG_TARGET};
 
@@ -197,13 +200,12 @@ impl Messenger for StarknetMessaging {
 
         let mut l1_handler_txs: Vec<L1HandlerTx> = vec![];
 
-        for (block_number, block_events) in self
-            .fetch_events(BlockId::Number(from_block), BlockId::Number(to_block))
+        let events = self.fetch_events(BlockId::Number(from_block), BlockId::Number(to_block))
             .await
             .map_err(|_| Error::SendError)
-            .unwrap()
-            .iter()
-        {
+            .unwrap();
+
+        for (block_number, block_events) in events.iter() {
             debug!(
                 target: LOG_TARGET,
                 "Converting events of block {} into L1HandlerTx ({} events)",
@@ -212,25 +214,18 @@ impl Messenger for StarknetMessaging {
             );
 
             for e in block_events.iter() {
-                if let Ok((tx, info)) = l1_handler_tx_from_event(e, chain_id) {
-                    let is_message_accepted = self
-                        .hooker
-                        .read()
-                        .await
-                        .verify_message_to_appchain(
-                            info.from_address,
-                            info.to_address,
-                            info.selector,
-                        )
-                        .await;
+                if let Ok(tx) = l1_handler_tx_from_event(e, chain_id) {
+                    if let Ok((from, to, selector)) = info_from_event(e) {
+                        let is_message_accepted = self
+                            .hooker
+                            .read()
+                            .await
+                            .verify_message_to_appchain(from, to, selector)
+                            .await;
 
-                    if is_message_accepted {
-                        l1_handler_txs.push(tx)
-                    } else {
-                        warn!(target: LOG_TARGET, "Message to appchain rejected by hooker: from:{:?} to:{:?} selector:{:?}",
-                                  info.from_address,
-                                  info.to_address,
-                                  info.selector);
+                        if is_message_accepted {
+                            l1_handler_txs.push(tx)
+                        }
                     }
                 }
             }
@@ -380,6 +375,27 @@ fn l1_handler_tx_from_event(event: &EmittedEvent, chain_id: FieldElement) -> Res
         version: FieldElement::ZERO,
         contract_address: to_address.into(),
     })
+}
+
+fn info_from_event(event: &EmittedEvent) -> Result<(FieldElement, FieldElement, FieldElement)> {
+    if event.keys[0] != selector!("MessageSentToAppchain") {
+        debug!(
+            target: LOG_TARGET,
+            "Event with key {:?} can't be converted into L1HandlerTx", event.keys[0],
+        );
+        return Err(Error::GatherError.into());
+    }
+
+    if event.keys.len() != 4 || event.data.len() < 2 {
+        error!(target: LOG_TARGET, "Event MessageSentToAppchain is not well formatted");
+    }
+
+    // See contrat appchain_messaging.cairo for MessageSentToAppchain event.
+    let from_address = event.keys[2];
+    let to_address = event.keys[3];
+    let entry_point_selector = event.data[0];
+
+    Ok((from_address, to_address, entry_point_selector))
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ use starknet::core::utils::get_contract_address;
 
 #[derive(Debug, Clone, Deserialize, Deref)]
 #[serde(transparent)]
-pub struct BroadcastedInvokeTx(BroadcastedInvokeTransaction);
+pub struct BroadcastedInvokeTx(pub BroadcastedInvokeTransaction);
 
 impl BroadcastedInvokeTx {
     pub fn into_tx_with_chain_id(self, chain_id: FieldElement) -> InvokeTx {

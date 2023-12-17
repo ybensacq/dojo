@@ -531,7 +531,7 @@ impl StarknetApiServer for StarknetApi {
             .hooker
             .read()
             .await
-            .verify_invoke_tx_before_pool(invoke_transaction.clone())
+            .verify_invoke_tx_before_pool(invoke_transaction.0.clone())
             .await
         {
             return Err(StarknetApiError::SolisAssetFault.into());

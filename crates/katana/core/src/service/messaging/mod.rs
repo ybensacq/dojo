@@ -177,6 +177,7 @@ pub enum MessengerMode {
 impl MessengerMode {
     pub async fn from_config(
         config: MessagingConfig,
+        #[allow(unused)]
         hooker: Arc<AsyncRwLock<dyn KatanaHooker + Send + Sync>>,
     ) -> MessengerResult<Self> {
         match config.chain.as_str() {

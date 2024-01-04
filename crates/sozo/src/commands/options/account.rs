@@ -42,7 +42,7 @@ impl AccountOptions {
         env_metadata: Option<&Environment>,
     ) -> Result<SingleOwnerAccount<P, LocalWallet>>
     where
-        P: Provider + Send + Sync + 'static,
+        P: Provider + Send + Sync,
     {
         let account_address = self.account_address(env_metadata)?;
         let signer = self.signer(env_metadata)?;
@@ -55,11 +55,7 @@ impl AccountOptions {
             signer,
             account_address,
             chain_id,
-            // This is made under the assumption that the accounts used with `sozo` commands would
-            // be one of the `katana` dev accounts. The dev accounts deployed on `katana` are
-            // legacy accounts (Cairo 0).
-            // TODO: Make this configurable
-            ExecutionEncoding::Legacy,
+            ExecutionEncoding::New,
         ))
     }
 

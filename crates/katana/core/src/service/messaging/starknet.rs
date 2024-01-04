@@ -121,7 +121,7 @@ impl StarknetMessaging {
             signer,
             self.sender_account_address,
             self.chain_id,
-            ExecutionEncoding::Legacy,
+            ExecutionEncoding::New,
         );
 
         account.set_block_id(BlockId::Tag(BlockTag::Latest));

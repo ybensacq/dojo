@@ -1,0 +1,11 @@
+[package]
+description = "Sozo signer implementations"
+edition.workspace = true
+license-file.workspace = true
+name = "sozo-signers"
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+starknet.workspace = true

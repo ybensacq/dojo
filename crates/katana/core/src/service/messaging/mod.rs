@@ -40,12 +40,12 @@ mod starknet;
 use std::path::Path;
 use std::sync::Arc;
 
-use ::starknet::core::types::FieldElement;
 use ::starknet::providers::ProviderError as StarknetProviderError;
 use anyhow::Result;
 use async_trait::async_trait;
 use ethereum::EthereumMessaging;
 use ethers::providers::ProviderError as EthereumProviderError;
+use katana_primitives::chain::ChainId;
 use katana_primitives::receipt::MessageToL1;
 use serde::Deserialize;
 use tokio::sync::RwLock as AsyncRwLock;
@@ -151,7 +151,7 @@ pub trait Messenger {
         &self,
         from_block: u64,
         max_blocks: u64,
-        chain_id: FieldElement,
+        chain_id: ChainId,
     ) -> MessengerResult<(u64, Vec<Self::MessageTransaction>)>;
 
     /// Computes the hash of the given messages and sends them to the settlement chain.

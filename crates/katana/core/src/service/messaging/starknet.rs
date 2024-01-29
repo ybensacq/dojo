@@ -1,6 +1,6 @@
 // SOLIS
-use tokio::sync::RwLock as AsyncRwLock;
 use crate::hooker::KatanaHooker;
+use tokio::sync::RwLock as AsyncRwLock;
 //
 
 use std::collections::HashMap;
@@ -19,6 +19,7 @@ use starknet::macros::{felt, selector};
 use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::{AnyProvider, JsonRpcClient, Provider};
 use starknet::signers::{LocalWallet, SigningKey};
+use tracing::info;
 use tracing::{debug, error, trace, warn};
 use url::Url;
 
@@ -113,7 +114,6 @@ impl StarknetMessaging {
         Ok(block_to_events)
     }
 
-    /// Sends an invoke TX on starknet.
     async fn send_invoke_tx(&self, calls: Vec<Call>) -> Result<FieldElement> {
         let signer = Arc::new(&self.wallet);
 
@@ -128,11 +128,21 @@ impl StarknetMessaging {
         account.set_block_id(BlockId::Tag(BlockTag::Latest));
 
         // TODO: we need to have maximum fee configurable.
-        let execution = account.execute(calls).fee_estimate_multiplier(10f64);
-        let estimated_fee = (execution.estimate_fee().await?.overall_fee) * 10;
-        let tx = execution.max_fee(estimated_fee.into()).send().await?;
+        let execution = account.execute(calls);
 
-        Ok(tx.transaction_hash)
+        match execution.send().await {
+            Ok(tx) => {
+                info!("Transaction successful: {:?}", tx);
+                println!("tx: {:?}", tx);
+                println!("tx_hash: {:?}", tx.transaction_hash);
+                Ok(tx.transaction_hash)
+            }
+            Err(e) => {
+                error!("Error sending transaction: {:?}", e);
+                // Depending on your error handling strategy, you might want to return the error or handle it differently
+                Err(e.into()) // Convert the error
+            }
+        }
     }
 
     /// Sends messages hashes to settlement layer by sending a transaction.
@@ -201,7 +211,8 @@ impl Messenger for StarknetMessaging {
 
         let mut l1_handler_txs: Vec<L1HandlerTx> = vec![];
 
-        let events = self.fetch_events(BlockId::Number(from_block), BlockId::Number(to_block))
+        let events = self
+            .fetch_events(BlockId::Number(from_block), BlockId::Number(to_block))
             .await
             .map_err(|_| Error::SendError)
             .unwrap();

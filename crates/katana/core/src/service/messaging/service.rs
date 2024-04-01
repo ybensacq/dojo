@@ -83,7 +83,7 @@ impl MessagingService {
     ) -> MessengerResult<(u64, usize)> {
         // 200 avoids any possible rejection from RPC with possibly lot's of messages.
         // TODO: May this be configurable?
-        let max_block = 200;
+        let max_block = 20;
 
         match messenger.as_ref() {
             MessengerMode::Ethereum(inner) => {

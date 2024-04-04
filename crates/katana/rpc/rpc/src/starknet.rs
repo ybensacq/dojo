@@ -592,7 +592,7 @@ impl StarknetApiServer for StarknetApi {
             .inner
             .sequencer
             .hooker
-            .write()
+            .read()
             .await
             .verify_invoke_tx_before_pool(invoke_transaction.0.clone())
             .await

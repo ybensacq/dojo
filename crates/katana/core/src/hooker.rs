@@ -43,7 +43,7 @@ pub trait KatanaHooker {
     /// # Arguments
     ///
     /// * `transaction` - The invoke transaction to be verified.
-    async fn verify_invoke_tx_before_pool(&mut self, transaction: BroadcastedInvokeTransaction)
+    async fn verify_invoke_tx_before_pool(mut self, transaction: BroadcastedInvokeTransaction)
     -> bool;
 
     /// Runs code right before a message to starknet
@@ -55,7 +55,7 @@ pub trait KatanaHooker {
     ///
     /// * `call` - The `Call` to inspect, built from the
     /// message.
-    async fn verify_tx_for_starknet(&mut self, call: Call) -> bool;
+    async fn verify_tx_for_starknet(mut self, call: Call) -> bool;
 
     /// Runs when Solis attempts to execute an order on Starknet,
     /// but it fails.
